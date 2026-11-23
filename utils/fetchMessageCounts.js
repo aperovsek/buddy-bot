@@ -1,5 +1,6 @@
 async function fetchMessageCounts(channel) {
     let counts = {};
+    let polls = {};
     let members;
 
     try {
@@ -23,6 +24,7 @@ async function fetchMessageCounts(channel) {
                 const user = msg.author.id;
                 if (!members.get(user)) continue;
                 counts[user] = (counts[user] || 0) + 1;
+                if (msg.poll) polls[user] = (polls[user] || 0) + 1;
                 
             }
 
@@ -48,7 +50,10 @@ async function fetchMessageCounts(channel) {
         }
     }
 
-    return counts;
+    return {
+        counts,
+        polls
+    };
 }
 
 module.exports = fetchMessageCounts;

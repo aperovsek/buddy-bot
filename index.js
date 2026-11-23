@@ -13,27 +13,74 @@ const logGuildId = process.env.LOG_GUILD_ID;
 
 const client = new Client({
   intents: [
-      GatewayIntentBits.GuildMessageReactions,
-      GatewayIntentBits.Guilds,
-      GatewayIntentBits.GuildMessages,
-      GatewayIntentBits.MessageContent,
-      GatewayIntentBits.GuildMembers
+    GatewayIntentBits.GuildMessageReactions,
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.MessageContent,
+    GatewayIntentBits.GuildMembers,
+
   ],
   partials: [Partials.Message, Partials.Channel, Partials.Reaction, Partials.User],
 });
 
-let welcomeChannelId = '508577166007730186';
-let goodbyeChannelId = '1009115321388515403';
+const guildConfigs = {};
+const secretWords = {};
 
-let secret = JSON.parse(fs.readFileSync('secret.json', 'utf8'));
-let stats = JSON.parse(fs.readFileSync('stats.json', 'utf8'));
+async function getSecretWord(guildId) {
+  if (secretWords[guildId]) return secretWords[guildId];
+  
+  const { data, error } = await supabase
+    .from('secret_words')
+    .select('*')
+    .eq('guild_id', guildId)
+    .single();
+  
+  if (error && error.code !== 'PGRST116') {
+    console.error(`Error fetching secret word for guild ${guildId}:`, error);
+  }
+  
+  secretWords[guildId] = data || { active: false };
+  return secretWords[guildId];
+}
 
-if (process.env.BETA == 1) {
-  welcomeChannelId = '1049440127480496160';
-  goodbyeChannelId = '1049440127480496160';
-} 
+async function updateSecretWord(guildId, updates) {
+  const { error } = await supabase
+    .from('secret_words')
+    .upsert({
+      guild_id: guildId,
+      ...updates
+    }, { onConflict: ['guild_id'] });
+  
+  if (error) {
+    console.error(`Error updating secret word for guild ${guildId}:`, error);
+    return false;
+  }
+  
+  secretWords[guildId] = {
+    ...secretWords[guildId],
+    ...updates
+  };
+  return true;
+}
 
-const originalLog = console.log; 
+async function getGuildConfig(guildId) {
+  if (guildConfigs[guildId]) return guildConfigs[guildId];
+
+  const { data, error } = await supabase
+    .from('guild_configs')
+    .select('*')
+    .eq('guild_id', guildId)
+    .single();
+
+  if (error && error.code !== 'PGRST116') {
+    console.error(`Error fetching config for guild ${guildId}:`, error);
+  }
+
+  guildConfigs[guildId] = data || {};
+  return guildConfigs[guildId];
+}
+
+const originalLog = console.log;
 console.log = (...data) => {
     originalLog(...data); // still log to terminal
 
@@ -52,13 +99,12 @@ for (const file of commandFiles) {
 client.login(process.env.DISCORD_TOKEN)
     .then(() => console.log('Login successful!'))
     .catch(err => console.error('Failed to login:', err));
-    
- 
+
+
 client.once('ready', async () => {
     console.log("Buddy Bot is online!");
     console.log(`Bot is ready in ${client.guilds.cache.size} guilds.`);
-    console.log(`Secret is ${secret.active ? "active" : "not active"}`);
-    
+
     for (const guild of client.guilds.cache.values()) {
       try {
         await guild.members.fetch();
@@ -71,15 +117,20 @@ client.once('ready', async () => {
 });
 
 client.on('guildMemberAdd', async member => {
-    if (process.env.BETA == 1) return;
+    const config = await getGuildConfig(member.guild.id);
+
+    const welcomeChannelId = config.welcome_channel_id || (process.env.BETA == 1 ? '1049440127480496160' : '508577166007730186');
     const channel = member.guild.channels.cache.get(welcomeChannelId);
     if (channel) {
         channel.send(`Doeran, <@${member.id}> <:doeran:1009551654988816394>!`);
     }
+
     if (member.user.bot) {
-      await member.roles.add("1005816223784783885"); // 2
+      const roleId = config.bot_role_id || (process.env.BETA == 1 ? '1049440127480496160' : '1005816223784783885');
+      try { await member.roles.add(roleId); } catch (e) {}
     } else {
-      await member.roles.add("920797106925600820"); // 8
+      const roleId = config.member_role_id || (process.env.BETA == 1 ? '1049440127480496160' : '920797106925600820');
+      try { await member.roles.add(roleId); } catch (e) {}
     }
 });
 
@@ -90,9 +141,18 @@ cron.schedule('0 0 * * 1', async () => { // weekly: "0 0 * * 1" testing: "*/5 * 
     } catch (error) {
         console.error('Error running weekly stat log:', error);
     }
-    resetSecret();
+    
+    for (const guild of client.guilds.cache.values()) {
+        await updateSecretWord(guild.id, {
+            active: true,
+            word: null,
+            triggered_by: null,
+            triggered_at: null,
+            word_found: null
+        });
+    }
 
-}, { timezone: 'CET' }); 
+}, { timezone: 'CET' });
 
 cron.schedule('0 0 * * 3', () => {
   supabase.from('user_counts').select('*').limit(1).then(() => {
@@ -136,42 +196,62 @@ client.on("messageCreate", async (message) => {
         const len = Math.floor(Math.random() * 300) + 1;
         const isUpper = Math.random() < 0.5;
         const aaa = (isUpper ? a.toUpperCase() : a).repeat(len);
-        
-        message.channel.send(aaa); 
+
+        message.channel.send(aaa);
     }
     const reg = /pir|piv[aeiou]|beer|per/i;
     if (reg.test(message.content)) {
         try {
             await message.react('🍺');
-            console.log(`Beer mentioned in ${message.channel.name}! ${stats.beer + 1} times total.`);
-            stats.beer += 1;
-            fs.writeFileSync('stats.json', JSON.stringify(stats, null, 2));
+            const { error: beerError } = await supabase
+                .from('beer_count')
+                .insert({
+                    guild_id: message.guild.id,
+                    user_id: message.author.id,
+                    timestamp: new Date().toISOString()
+                });
+            if (beerError) {
+                console.log('Error saving beer mention:', beerError);
+            } else {
+                console.log(`Beer mentioned by ${message.author.tag} in ${message.channel.name}`);
+            }
         } catch (error) {
             console.log(`Failed to react with beer emoji: ${error}`);
         }
     }
 
     // Emoji reaction on keyword
-    if(secret.active) {
-      const secretWord = new RegExp(process.env.SECRET_WORD, 'i');
-      
+    const guildSecret = await getSecretWord(message.guild.id);
+    if(guildSecret.active && guildSecret.word) {
+      const secretWord = new RegExp(guildSecret.word, 'i');
+
       if (secretWord.test(message.content)) {
           try {
               await message.react('<:word_of_the_week:1470196970470641787>');// custom emoji ID
-              console.log(`${message.author.username} triggered word of the week reaction.`);
-              
+              console.log(`${message.author.username} triggered word of the week reaction in ${message.guild.name}.`);
+
               // Update and save state
-              secret.active = false;
-              secret.triggeredBy = message.author.id;
-              secret.triggeredAt = new Date().toISOString();
-              secret.wordFound = message.content.match(secretWord)[0];
-              secret.history.push({
-                  userId: message.author.id,
-                  username: message.author.username,
-                  triggeredAt: new Date().toISOString(),
-                  word: message.content.match(secretWord)[0]
+              await updateSecretWord(message.guild.id, {
+                  active: false,
+                  triggered_by: message.author.id,
+                  triggered_at: new Date().toISOString(),
+                  word_found: message.content.match(secretWord)[0]
               });
-              fs.writeFileSync('secret.json', JSON.stringify(secret, null, 2));
+              
+              // Save to history
+              const { error: historyError } = await supabase
+                  .from('secret_word_history')
+                  .insert({
+                      guild_id: message.guild.id,
+                      user_id: message.author.id,
+                      username: message.author.username,
+                      word: message.content.match(secretWord)[0],
+                      triggered_at: new Date().toISOString()
+                  });
+              
+              if (historyError) {
+                  console.log('Error saving secret word history:', historyError);
+              }
           } catch (error) {
               console.log(`Failed to react with emoji: ${error}`);
           }
@@ -200,8 +280,9 @@ client.on('interactionCreate', async interaction => {
 });
 
 client.on('guildMemberRemove', async member => {
-    if (process.env.BETA == 1) return;
+    const config = await getGuildConfig(member.guild.id);
 
+    const goodbyeChannelId = config.goodbye_channel_id || (process.env.BETA == 1 ? '1049440127480496160' : '1009115321388515403');
     const channel = member.guild.channels.cache.get(goodbyeChannelId);
     if (!channel) return;
 
@@ -254,10 +335,4 @@ const mock = str => str
   .map(l => Math.random() < 0.5 && l.toUpperCase() || l.toLowerCase())
   .join('')
 
-const resetSecret = () => {
-  secret.active = true;
-  secret.triggeredBy = null;
-  secret.triggeredAt = null;
-  secret.wordFound = null;
-  fs.writeFileSync('secret.json', JSON.stringify(secret, null, 2));
-}
+

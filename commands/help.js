@@ -19,6 +19,7 @@ module.exports = {
     }
     const textTriggers = [
       "`aaa` — Spams some aaa's to support you in your time of need",
+      "`pivo` — :beer: :call_me:"
     ];
 
     const embed = new EmbedBuilder()

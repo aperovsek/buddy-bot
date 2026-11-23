@@ -8,14 +8,21 @@ module.exports = {
   async execute(interaction) {
     await interaction.reply('Counting messages, please wait...');
     const guild = interaction.guild;
+    
+    const { data: config } = await supabase
+      .from('guild_configs')
+      .select('log_channel_id, exclude_categories')
+      .eq('guild_id', guild.id)
+      .single();
+    
+    const excludedCategories = config?.exclude_categories || [];
+    
     const channels = guild.channels.cache.filter(
       c => c.type === ChannelType.GuildText
-      && c.parentId !== '932752870820946000' // exclude arhiv
-      && c.parentId !== '1007666543850692708' // exclude admin channels
+      && (!config || !excludedCategories.includes(c.parentId))
     );
 
-    const out_id = process.env.BETA == 0 ? "1398262894638010388" : "1049440127480496160";
-    const output_channel = guild.channels.cache.get(out_id);
+    const output_channel = config?.log_channel_id ? guild.channels.cache.get(config.log_channel_id) : null;
 
     for (const channel of channels.values()) {
       const t = Date.now();
@@ -80,7 +87,7 @@ module.exports = {
 
     if (channelError) {
       console.error('Supabase fetch error (channels):', channelError);
-      await output_channel.send('Failed to fetch channel message counts from the database.');
+      if (output_channel) await output_channel.send('Failed to fetch channel message counts from the database.');
       return;
     }
 
@@ -114,12 +121,23 @@ module.exports = {
       .setColor(0xFEE75C)
       .setTimestamp();
 
-    const msg1 = await output_channel.messages.fetch(process.env.BETA == 1 ?"1402019754788782140":"1398278318465355797");
-    const msg2 = await output_channel.messages.fetch(process.env.BETA == 1 ?"1402019755807735912":"1398278320461971577");
-    const msg3 = await output_channel.messages.fetch(process.env.BETA == 1 ?"1402019757099847840":"1398278321669673031");
-
-    await msg1.edit({ embeds: [userEmbed] });
-    await msg2.edit({ embeds: [channelEmbed] });
-    await msg3.edit({ embeds: [totalEmbed] });
+    if (output_channel) {
+      if (config?.user_msg_id && config?.channel_msg_id && config?.total_msg_id) {
+        try {
+          const msg1 = await output_channel.messages.fetch(config.user_msg_id);
+          const msg2 = await output_channel.messages.fetch(config.channel_msg_id);
+          const msg3 = await output_channel.messages.fetch(config.total_msg_id);
+          await msg1.edit({ embeds: [userEmbed] });
+          await msg2.edit({ embeds: [channelEmbed] });
+          await msg3.edit({ embeds: [totalEmbed] });
+        } catch (e) {
+          await output_channel.send({ embeds: [userEmbed, channelEmbed, totalEmbed] });
+        }
+      } else {
+        await output_channel.send({ embeds: [userEmbed, channelEmbed, totalEmbed] });
+      }
+    }
+    
+    await interaction.editReply('Log command completed!');
   },
 };

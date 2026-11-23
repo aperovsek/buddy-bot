@@ -1,0 +1,26 @@
+# Project
+Stack: Node.js, JavaScript, supabase. 
+Build/test: Run: npm start (node buddy-bot.js). No build step. Tests: none.. Entry points: buddy-bot.js.
+
+# Structure
+index.js - entry point, starts the bot
+command-builder.js - builds slash commands using SlashCommandBulder
+commands/ - command files
+utils/ - shared helpers
+stats.json - stores the beer mention count
+Dockerfile, docker-compose.yml - container deployment
+nodemon.json - dev auto-restart
+.env, secret.json - secrets. Never read, edit, print, or commit.
+
+# Conventions
+- Match existing style, naming, and patterns in surrounding code.
+- Use only libraries already in the project; ask before adding any.
+
+# Behavior
+- Read relevant files before editing. Never guess APIs, signatures, or file contents; if unsure, say so or look it up.
+- Make the smallest change that solves the task. No refactors, renames, or unrelated edits.
+- Output only changed code (diffs or edited functions), not whole files.
+- No explanations, preamble, or summaries unless asked. One line max after the change.
+- If the request is ambiguous, ask one short question before coding.
+- Handle edge cases and errors relevant to the task; don't add speculative features.
+- Before finishing, check that the code compiles and matches existing types/signatures.

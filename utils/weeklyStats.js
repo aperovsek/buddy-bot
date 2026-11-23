@@ -2,20 +2,19 @@ const fetchWeeklyCounts = require('./fetchWeeklyCounts');
 const { EmbedBuilder, ChannelType } = require('discord.js');
 const supabase = require('./supabaseClient');
 const QuickChart = require('quickchart-js');
-const fs = require('fs');
 let threadsg;
 
 async function createChartEmbed(graphData){
     const chart = new QuickChart()
       .setConfig({
         type: 'bar',
-        data: { 
-          labels: ['Mon', 'Tue', 'Wed','Thu', 'Fri','Sat','Sun'], 
-          datasets: [{ 
+        data: {
+          labels: ['Mon', 'Tue', 'Wed','Thu', 'Fri','Sat','Sun'],
+          datasets: [{
             backgroundColor: '#008cffff',
-            borderColor: '#008cffff', 
-            data: graphData, 
-          }] 
+            borderColor: '#008cffff',
+            data: graphData,
+          }]
         },
         options: {
           scales: {
@@ -44,7 +43,7 @@ async function createChartEmbed(graphData){
             fontColor: '#ffffff'
           },
           legend: {
-              display: false 
+              display: false
           },
         }
       })
@@ -61,9 +60,8 @@ async function createChartEmbed(graphData){
       .setTimestamp();
 
 }
-async function createSummaryEmbed(userTotals, channelTotals) {
+async function createSummaryEmbed(userTotals, channelTotals, guild, beerCount) {
     const totalMessages = Object.values(userTotals).reduce((sum, count) => sum + count, 0);
-    const stats = JSON.parse(fs.readFileSync('stats.json', 'utf8'));
 
     // Get top 3 users
     const topUsers = Object.entries(userTotals)
@@ -77,9 +75,6 @@ async function createSummaryEmbed(userTotals, channelTotals) {
     // Get top 1 channel
     const [topChannelId, topChannelCount] = Object.entries(channelTotals)
       .sort((a, b) => b[1] - a[1])[0] || [null, null];
-
-    // Beer mention count
-    const beerCount = stats.beer || 0;
 
   return new EmbedBuilder()
     .setTitle(`This Week's Server Activity Summary`)
@@ -178,6 +173,14 @@ async function createUserEmbed(userTotals, guild) {
       .setTimestamp();
 }
 async function recount(guild) {
+  const { data: config } = await supabase
+    .from('guild_configs')
+    .select('exclude_categories')
+    .eq('guild_id', guild.id)
+    .single();
+
+  const excludedCategories = config?.exclude_categories || [];
+
   const { error: deleteError } = await supabase
     .from('user_counts_week')
     .delete()
@@ -190,18 +193,17 @@ async function recount(guild) {
 
   const channels = guild.channels.cache.filter(
     c => c.type === ChannelType.GuildText
-    && c.parentId !== '932752870820946000' // exclude arhiv
-    && c.parentId !== '1007666543850692708' // exclude admin channels
+    && !excludedCategories.includes(c.parentId)
   );
   const allDailyCounts = {};
 
   for (const channel of channels.values()) {
     const t = Date.now();
     const {
-      counts, 
-      daily, 
-      reactionTotals, 
-      reactionGiven, 
+      counts,
+      daily,
+      reactionTotals,
+      reactionGiven,
       reactionReceived,
       threads
     } = await fetchWeeklyCounts(channel);
@@ -247,62 +249,98 @@ async function recount(guild) {
 }
 
 async function weeklyStats(client) {
-  const guild = await client.guilds.fetch(process.env.BETA == 0 ? "508432432312352780" : "939531690899034132");
-  const out_id = process.env.BETA == 0 ? "1398262894638010388" : "1049440127480496160";
+  const { data: guildConfigs, error: fetchError } = await supabase
+    .from('guild_configs')
+    .select('*');
 
-  const output_channel = guild.channels.cache.get(out_id);
-
-  const graphData = await recount(guild);
-
-  const { data, error } = await supabase
-    .from('user_counts_week')
-    .select('user_id, channel_id, msg_count, react_given, react_received')
-    .eq('guild_id', guild.id);
-  if (error) {
-    console.log('Supabase fetch error:', error);
-    await interaction.editReply('Failed to fetch message counts from the database.');
+  if (fetchError || !guildConfigs?.length) {
+    console.log('No guild configs found for weekly stats:', fetchError);
     return;
   }
 
-  const userTotals = {};
-  const urgTotal = {};
-  const urrTotal = {};
-  const channelTotals = {};
+  for (const config of guildConfigs) {
+    const guild = await client.guilds.fetch(config.guild_id);
+    if (!guild) continue;
 
-  const secret = JSON.parse(fs.readFileSync('secret.json', 'utf8'));
-  
-  for (const row of data) {
-    userTotals[row.user_id] = (userTotals[row.user_id] || 0) + row.msg_count;
-    urgTotal[row.user_id] = (urgTotal[row.user_id] || 0) + row.react_given;
-    urrTotal[row.user_id] = (urrTotal[row.user_id] || 0) + row.react_received;
-    channelTotals[row.channel_id] = (channelTotals[row.channel_id] || 0) + row.msg_count;   
+    const output_channel = config.log_channel_id ? guild.channels.cache.get(config.log_channel_id) : null;
+    if (!output_channel) continue;
+
+    const graphData = await recount(guild);
+
+    const { data, error } = await supabase
+      .from('user_counts_week')
+      .select('user_id, channel_id, msg_count, react_given, react_received')
+      .eq('guild_id', guild.id);
+    if (error) {
+      console.log('Supabase fetch error:', error);
+      continue;
+    }
+
+    const userTotals = {};
+    const urgTotal = {};
+    const urrTotal = {};
+    const channelTotals = {};
+
+    for (const row of data) {
+      userTotals[row.user_id] = (userTotals[row.user_id] || 0) + row.msg_count;
+      urgTotal[row.user_id] = (urgTotal[row.user_id] || 0) + row.react_given;
+      urrTotal[row.user_id] = (urrTotal[row.user_id] || 0) + row.react_received;
+      channelTotals[row.channel_id] = (channelTotals[row.channel_id] || 0) + row.msg_count;   
+    }
+    
+    const { data: secretWordData, error: secretError } = await supabase
+        .from('secret_words')
+        .select('triggered_by, word_found, word')
+        .eq('guild_id', guild.id)
+        .single();
+    
+    if (!secretError && secretWordData?.triggered_by) {
+      userTotals[secretWordData.triggered_by] += 200;
+    }
+
+    const { data: weeklyBeerCount, error: beerError } = await supabase
+        .from('beer_count')
+        .select('*')
+        .eq('guild_id', guild.id)
+        .gte('timestamp', new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString());
+
+    const beerCount = weeklyBeerCount?.length || 0;
+
+    const userEmbed = await createUserEmbed(userTotals, guild);
+    const channelEmbed = await createChannelEmbed(channelTotals, guild);
+    const summaryEmbed = await createSummaryEmbed(userTotals, channelTotals, guild, beerCount);
+    const reactEmbed = await createReactEmbed(urgTotal, urrTotal);
+    const chartEmbed = await createChartEmbed(graphData);
+
+    await output_channel.send({ content: null, embeds: [userEmbed] });
+    await output_channel.send({ content: null, embeds: [channelEmbed] });
+    await output_channel.send({ content: null, embeds: [summaryEmbed] });
+    await output_channel.send({ content: null, embeds: [reactEmbed] });
+    await output_channel.send({ content: null, embeds: [chartEmbed] });
+
+    const wordDisplay = secretWordData?.word_found || secretWordData?.word || 'unknown';
+    const triggeredBy = secretWordData?.triggered_by;
+    
+    const desc = triggeredBy ? 
+      `<@${triggeredBy}> guessed the secret word <a:zozparty:1466446491697807495>`:
+      `Nobody guessed the secret word :(`;
+    
+    const beerDesc = beerCount > 0 ? `Beer mentioned **${beerCount}** times this week.` : 'No beer mentions this week.';
+
+    const embed = new EmbedBuilder()
+        .setTitle(`Secret Word of the Week was \`${wordDisplay}\`!`)
+        .setDescription(desc)
+        .setColor(0x00FF00)
+        .setTimestamp();
+    await output_channel.send({ embeds: [embed] });
+
+    const beerEmbed = new EmbedBuilder()
+        .setTitle('🍺 Beer Statistics')
+        .setDescription(beerDesc)
+        .setColor(0xFFA500)
+        .setTimestamp();
+    await output_channel.send({ embeds: [beerEmbed] });
   }
-  if ( secret.triggeredBy) {
-    userTotals[secret.triggeredBy] += 200;
-  }
-
-  const userEmbed = await createUserEmbed(userTotals, guild);
-  const channelEmbed = await createChannelEmbed(channelTotals, guild);
-  const summaryEmbed = await createSummaryEmbed(userTotals, channelTotals);
-  const reactEmbed = await createReactEmbed(urgTotal, urrTotal);
-  const chartEmbed = await createChartEmbed(graphData);
-
-  await output_channel.send({ content: null, embeds: [userEmbed] });
-  await output_channel.send({ content: null, embeds: [channelEmbed] });
-  await output_channel.send({ content: null, embeds: [summaryEmbed] });
-  await output_channel.send({ content: null, embeds: [reactEmbed] });
-  await output_channel.send({ content: null, embeds: [chartEmbed] });
-  
-  const desc = secret.triggeredBy ? 
-    `<@${secret.triggeredBy}> guessed the secret word <a:zozparty:1466446491697807495>`:
-    `Nobody guessed the secret word :(`;
-
-  const embed = new EmbedBuilder()
-      .setTitle(`Secret Word of the Week was \`${secret.wordFound || eval(secret.word)}\`!`)
-      .setDescription(desc)
-      .setColor(0x00FF00)
-      .setTimestamp();
-  await output_channel.send({ embeds: [embed] });
 
 };
 
