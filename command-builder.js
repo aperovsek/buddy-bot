@@ -56,7 +56,7 @@ const commands = [
         .setRequired(true)
     ),
   new SlashCommandBuilder()
-    .setName('help')  
+    .setName('help')
     .setDescription('Show all commands and what they do')
     .toJSON(),
   new SlashCommandBuilder()
@@ -84,6 +84,10 @@ const commands = [
   new SlashCommandBuilder()
     .setName('leaderboard')
     .setDescription('Show server leaderboard by message count')
+    .toJSON(),
+  new SlashCommandBuilder()
+    .setName('invite')
+    .setDescription('Invite Buddy to your servers')
     .toJSON(),
   new SlashCommandBuilder()
     .setName('test-weekly')
