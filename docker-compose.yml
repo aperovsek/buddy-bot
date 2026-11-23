@@ -1,10 +1,9 @@
-version: "3.8"
 services:
   bot:
     build: .
-    container_name: buddy-bot
     restart: always
-    env_file:
-      - .env
+    env_file: [.env]
     volumes:
-      - ./:/app
+      - bot-data:/app/data   # only if secret.json / stats.json must survive redeploys
+volumes:
+  bot-data:
